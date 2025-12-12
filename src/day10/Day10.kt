@@ -64,23 +64,8 @@ fun main() {
         val visited = mutableSetOf<String>()
         var maxDepth = 0
 
-        val optimizedButtons = buttons.map { button ->
-            val l = MutableList(joltages.size) { 0 }
-            for (index in button) {
-                l[index] = 1
-            }
-            l
-        }
-
         while (queue.isNotEmpty()) {
             val (current, buttonPresses) = queue.removeFirst()
-//            if (buttonPresses > 11) {
-//                println("Could not find solution with $buttonPresses presses to reach $joltages")
-//                return buttonPresses
-//            }
-//            if(buttonPresses % 10 == 0) {
-//                println("At $buttonPresses presses, queue size: ${queue.size}")
-//            }
             if (current.joinToString() in visited) {
                 continue
             }
@@ -94,15 +79,8 @@ fun main() {
                 return buttonPresses
             }
 
-//            for (button in buttons) {
-//                val next = current.mapIndexed { index, joltage -> if (index in button) joltage + 1 else joltage }
-//                if (next.indices.all { next[it] <= joltages[it] }) {
-//                    queue.addLast(next to buttonPresses + 1)
-//                }
-//            }
-
-            for (button in optimizedButtons) {
-                val next = current.indices.map { current[it] + button[it] }
+            for (button in buttons) {
+                val next = current.mapIndexed { index, joltage -> if (index in button) joltage + 1 else joltage }
                 if (next.indices.all { next[it] <= joltages[it] }) {
                     queue.addLast(next to buttonPresses + 1)
                 }
@@ -135,7 +113,6 @@ fun main() {
             }
             expandedButtons
         }
-        val buttonPresses = MutableList(buttons.size) { 0 }
         val context = Context()
         val optimizer = context.mkOptimize()
         val buttonVariables = buttons.indices.map { context.mkIntConst("b$it") }
@@ -146,8 +123,8 @@ fun main() {
 
         // Actual effects must match target joltages
         joltages.indices.forEach { joltageIndex ->
-            val contributions = buttonPresses.mapIndexed { index, count ->
-                context.mkMul(context.mkInt(buttonEffects[index][joltageIndex]), buttonVariables[index])
+            val contributions = buttons.indices.map {
+                context.mkMul(context.mkInt(buttonEffects[it][joltageIndex]), buttonVariables[it])
             }
             val mkAdd = context.mkAdd(*contributions.toTypedArray())
             optimizer.Add(context.mkEq(mkAdd, context.mkInt(joltages[joltageIndex])))
