@@ -1,6 +1,7 @@
 package day10
 
 import check
+import com.microsoft.z3.Context
 import println
 import readInput
 
@@ -84,7 +85,7 @@ fun main() {
                 continue
             }
             visited.add(current.joinToString())
-            if(buttonPresses > maxDepth) {
+            if (buttonPresses > maxDepth) {
                 maxDepth = buttonPresses
                 println("New max depth: $maxDepth, visited size: ${visited.size}, queue size: ${queue.size}")
             }
@@ -111,7 +112,7 @@ fun main() {
         return -1
     }
 
-    fun part2(input: List<String>): Int {
+    fun solveMachine(joltages: List<Int>, buttons: List<List<Int>>): Int {
         /**
          * Buttons have an effect e on the joltage:
          * ei = 0 or 1 for each index in joltages
@@ -127,12 +128,45 @@ fun main() {
          * sum(bi) -> min
          */
 
+        val buttonEffects = buttons.map { button ->
+            val expandedButtons = MutableList(joltages.size) { 0 }
+            for (index in button) {
+                expandedButtons[index] = 1
+            }
+            expandedButtons
+        }
+        val buttonPresses = MutableList(buttons.size) { 0 }
+        val context = Context()
+        val optimizer = context.mkOptimize()
+        val buttonVariables = buttons.indices.map { context.mkIntConst("b$it") }
+
+        // Constraints
+        // all positive
+        buttonVariables.forEach { optimizer.Add(context.mkGe(it, context.mkInt(0))) }
+
+        // Actual effects must match target joltages
+        joltages.indices.forEach { joltageIndex ->
+            val contributions = buttonPresses.mapIndexed { index, count ->
+                context.mkMul(context.mkInt(buttonEffects[index][joltageIndex]), buttonVariables[index])
+            }
+            val mkAdd = context.mkAdd(*contributions.toTypedArray())
+            optimizer.Add(context.mkEq(mkAdd, context.mkInt(joltages[joltageIndex])))
+        }
+
+        // Objective - minimize total button presses
+        val totalButtonPresses = context.mkAdd(*buttonVariables.toTypedArray())
+        optimizer.MkMinimize(totalButtonPresses)
+
+        optimizer.Check()
+        val model = optimizer.model
+        val eval = model.eval(totalButtonPresses, false)
+
+        return eval.toString().toInt()
+    }
+
+    fun part2(input: List<String>): Int {
         val machines = parseInput(input)
-
-//        val map = machines.parallelStream().map { findShortestJoltageConfiguration(it.third, it.second) }
-//        return map.toList().sum()
-
-        return machines.sumOf { findShortestJoltageConfiguration(it.third, it.second) }
+        return machines.sumOf { solveMachine(it.third, it.second) }
     }
 
 
