@@ -28,35 +28,78 @@ fun main() {
         return rectangleAreas.max()
     }
 
-    fun getNeighbors(position: Pair<Long, Long>, border: Set<Pair<Long, Long>>): Set<Pair<Long, Long>> {
-        val directions = (-1..1).flatMap { row -> (-1..1).map { col -> row to col } }
-
-        return directions.map { it.first + position.first to it.second + position.second }
-            .filter { it !in border && it != position }.toSet()
-    }
-
-    fun flood(start: Pair<Long, Long>, border: Set<Pair<Long, Long>>): Set<Pair<Long, Long>> {
-        println("Starting flood fill at $start")
-        val visited = mutableSetOf<Pair<Long, Long>>()
-        val queue = ArrayDeque<Pair<Long, Long>>(listOf(start))
-
-        while (queue.isNotEmpty()) {
-            if(visited.size % 100_000 == 0) {
-                println("Flood fill visited size: ${visited.size}, queue size: ${queue.size}")
-            }
-            val current = queue.removeLast()
-            if (current in visited) {
-                continue
-            }
-            visited.add(current)
-            queue.addAll(getNeighbors(current, border))
+    fun isInPolygon(point: Pair<Long, Long>, polygonBorder: Set<Pair<Long, Long>>, goRight: Boolean): Boolean {
+        if (point in polygonBorder) {
+            return true
         }
 
-        println("Flood fill done")
-        return visited
+        if (goRight) {
+            return polygonBorder.count { it.first == point.first && it.second >= point.second } % 2 == 1
+        } else {
+            return polygonBorder.count { it.first == point.first && it.second <= point.second } % 2 == 1
+        }
+
     }
 
-    fun part2(input: List<String>): Long {
+    fun isInPolygon(
+        c1: Pair<Long, Long>,
+        c2: Pair<Long, Long>,
+        polygonBorder: Map<Long, Set<Pair<Long, Long>>>,
+        minCol: Long,
+        maxCol: Long
+    ): Boolean {
+        val topLeft = min(c1.first, c2.first) to min(c1.second, c2.second)
+        val topRight = min(c1.first, c2.first) to max(c1.second, c2.second)
+        val bottomLeft = max(c1.first, c2.first) to min(c1.second, c2.second)
+        val bottomRight = max(c1.first, c2.first) to max(c1.second, c2.second)
+
+        val minRow = topLeft.first
+        val maxRow = bottomLeft.first
+        val maxRectCol = topRight.second
+        val minRectCol = topLeft.second
+
+        var goRight = true
+        var filtered: Set<Pair<Long, Long>>
+        if (abs(minCol - minRectCol) < abs(maxCol - maxRectCol)) {
+            goRight = false
+            filtered = polygonBorder.filter { it.key in minRow..maxRow }.map { it.value }.flatten().filter { it.second >= minRectCol }.toSet()
+        } else {
+            filtered = polygonBorder.filter { it.key in minRow..maxRow }.map { it.value }.flatten().filter { it.second <= maxRectCol }.toSet()
+        }
+
+        if ((topLeft.second..topRight.second).any {
+                !isInPolygon(
+                    Pair(topLeft.first, it),
+                    filtered,
+                    goRight
+                )
+            }) return false
+        if ((bottomLeft.second..bottomRight.second).any {
+                !isInPolygon(
+                    Pair(bottomLeft.first, it),
+                    filtered,
+                    goRight
+                )
+            }) return false
+        if ((topLeft.first..bottomLeft.first).any {
+                !isInPolygon(
+                    Pair(it, topLeft.second),
+                    filtered,
+                    goRight
+                )
+            }) return false
+        if ((topRight.first..bottomRight.first).any {
+                !isInPolygon(
+                    Pair(it, topRight.second),
+                    filtered,
+                    goRight
+                )
+            }) return false
+
+        return true
+    }
+
+    fun part22(input: List<String>): Long {
         val redTiles = parseInput(input)
 
         // Build polygon outline
@@ -85,48 +128,37 @@ fun main() {
             }
         }
 
-//        printAsGrid(border.map { it.first.toInt() to it.second.toInt() }, 2, printRowNumbers = true)
+        val borderByRow = border.groupBy { it.first }.map { (row, points) -> row to points.sortedBy { it.second }.toSet() }.toMap()
 
-
-        // Flood Polygon
-//        val floodFillStart = Pair(9L, 2L)
-        val leftMost = border.minBy { it.second }
-        val topMost = border.minBy { it.first }
-
-        val floodFillStart = Pair(topMost.first + 1, leftMost.second + 1)
-        val polygonAreaWithoutBorder = flood(floodFillStart, border)
-        val polygonArea = polygonAreaWithoutBorder + border
-//        printAsGrid(polygonArea.map { it.first.toInt() to it.second.toInt() }, 2)
+        val minCol = border.minBy { it.second }.second
+        var maxCol = border.maxBy { it.second }.second
 
         var maxArea = 0L
         println("Red Tile size ${redTiles.size}")
-        redTiles.indices.flatMap { i ->
-            (i + 1 until redTiles.size).mapNotNull { j ->
+        val rectanglesToCheck = redTiles.indices.flatMap { i ->
+            (i + 1 until redTiles.size).mapNotNull { j -> i to j }
+        }.count()
+        println("Total rectangles to check: $rectanglesToCheck")
+
+        redTiles.indices.forEach { i ->
+            (i + 1 until redTiles.size).forEach { j ->
                 val c1 = redTiles[i]
                 val c2 = redTiles[j]
 
-                val topLeft = min(c1.first, c2.first) to min(c1.second, c2.second)
-                val topRight = min(c1.first, c2.first) to max(c1.second, c2.second)
-                val bottomLeft = max(c1.first, c2.first) to min(c1.second, c2.second)
-                val bottomRight = max(c1.first, c2.first) to max(c1.second, c2.second)
+                val dr = c1.first - c2.first
+                val dc = c1.second - c2.second
 
-                val rectangleBorder = mutableSetOf<Pair<Long, Long>>()
-                (topLeft.second..topRight.second).forEach { rectangleBorder.add(Pair(topLeft.first, it)) }
-                (bottomLeft.second..bottomRight.second).forEach { rectangleBorder.add(Pair(bottomLeft.first, it)) }
+                val area = (abs(dr) + 1) * (abs(dc) + 1)
 
-                (topLeft.first..bottomLeft.first).forEach { rectangleBorder.add(Pair(it, topLeft.second)) }
-                (topRight.first..bottomRight.first).forEach { rectangleBorder.add(Pair(it, topRight.second)) }
-
-                println("Checking rectangle with border size ${rectangleBorder.size}")
-                if (rectangleBorder.all { it in polygonArea }) {
-                    val dr = c1.first - c2.first
-                    val dc = c1.second - c2.second
-
-                    val area = (abs(dr) + 1) * (abs(dc) + 1)
-                    if (area > maxArea) {
+                // 1_561_582_800 -> too high
+                if (area > maxArea) {
+                    println("Checking rectangle with area ${area}")
+                    if (isInPolygon(c1, c2, borderByRow, minCol, maxCol)) {
                         maxArea = area
                         println("New max area: $maxArea for corners $c1 and $c2")
                     }
+                } else {
+                    println("Skipping because too small")
                 }
             }
         }
@@ -136,9 +168,9 @@ fun main() {
 
     val testInput = readInput("day09/day09_test")
     check(part1(testInput), 50)
-//    check(part2(testInput), 24)
+//    check(part22(testInput), 24)
 
     val input = readInput("day09/day09")
     part1(input).println()
-    part2(input).println()
+    part22(input).println()
 }
