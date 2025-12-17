@@ -28,138 +28,135 @@ fun main() {
         return rectangleAreas.max()
     }
 
-    fun isInPolygon(point: Pair<Long, Long>, polygonBorder: Set<Pair<Long, Long>>, goRight: Boolean): Boolean {
-        if (point in polygonBorder) {
-            return true
+    data class Polygon(
+        val xIndex: Map<Long, Int>,
+        val yIndex: Map<Long, Int>,
+        private val prefixSums: List<List<Long>>
+    ) {
+        // Number of inside cells within the rectangle defined by [rowStart, rowEnd) x [colStart, colEnd)
+        fun insideCells(rowStart: Int, rowEnd: Int, colStart: Int, colEnd: Int): Long {
+            val areaToBottomRight = prefixSums[rowEnd][colEnd]
+            val areaAbove = prefixSums[rowStart][colEnd]
+            val areaLeft = prefixSums[rowEnd][colStart]
+            // has to be added back because it was subtracted twice
+            val areaTopLeft = prefixSums[rowStart][colStart]
+
+            return areaToBottomRight - areaAbove - areaLeft + areaTopLeft
         }
 
-        if (goRight) {
-            return polygonBorder.count { it.first == point.first && it.second >= point.second } % 2 == 1
-        } else {
-            return polygonBorder.count { it.first == point.first && it.second <= point.second } % 2 == 1
-        }
+        fun containsRectangle(c1: Pair<Long, Long>, c2: Pair<Long, Long>): Boolean {
+            val bottom = min(c1.first, c2.first)
+            val top = max(c1.first, c2.first)
+            val left = min(c1.second, c2.second)
+            val right = max(c1.second, c2.second)
 
+            // The tested rectangle must align with the polygon grid which is the case here because the rectangle is
+            // constructed from polygon vertices.
+            // The other two missing corners will always have either the same row or column as one of the polygon
+            // vertices so they will also be in the indices.
+            val rowStart = yIndex[bottom] ?: return false
+            val rowEnd = yIndex[top] ?: return false
+            val colStart = xIndex[left] ?: return false
+            val colEnd = xIndex[right] ?: return false
+
+            val cellsInThePolygon = insideCells(rowStart, rowEnd, colStart, colEnd)
+            val cellsInTheRectangle = (rowEnd - rowStart) * (colEnd - colStart)
+            return cellsInThePolygon == cellsInTheRectangle.toLong()
+        }
     }
 
-    fun isInPolygon(
-        c1: Pair<Long, Long>,
-        c2: Pair<Long, Long>,
-        polygonBorder: Map<Long, Set<Pair<Long, Long>>>,
-        minCol: Long,
-        maxCol: Long
-    ): Boolean {
-        val topLeft = min(c1.first, c2.first) to min(c1.second, c2.second)
-        val topRight = min(c1.first, c2.first) to max(c1.second, c2.second)
-        val bottomLeft = max(c1.first, c2.first) to min(c1.second, c2.second)
-        val bottomRight = max(c1.first, c2.first) to max(c1.second, c2.second)
+    /**
+     * Build prefix sum in 2D. Value at (r, c) is the number of 'inside' cells in the rectangle from (0,0) to (r-1,c-1).
+     *
+     * Take the rectangle above the current cell and the rectangle left of the current cell and subtract the overlapping top-left rectangle.
+     * Then add 1 if the current cell is inside the polygon.
+     */
+    fun calculatePrefixSum(grid: List<List<Boolean>>): List<List<Long>> {
+        val rowCount = grid.size
+        val colCount = grid[0].size
 
-        val minRow = topLeft.first
-        val maxRow = bottomLeft.first
-        val maxRectCol = topRight.second
-        val minRectCol = topLeft.second
-
-        var goRight = true
-        var filtered: Set<Pair<Long, Long>>
-        if (abs(minCol - minRectCol) < abs(maxCol - maxRectCol)) {
-            goRight = false
-            filtered = polygonBorder.filter { it.key in minRow..maxRow }.map { it.value }.flatten().filter { it.second >= minRectCol }.toSet()
-        } else {
-            filtered = polygonBorder.filter { it.key in minRow..maxRow }.map { it.value }.flatten().filter { it.second <= maxRectCol }.toSet()
-        }
-
-        if ((topLeft.second..topRight.second).any {
-                !isInPolygon(
-                    Pair(topLeft.first, it),
-                    filtered,
-                    goRight
-                )
-            }) return false
-        if ((bottomLeft.second..bottomRight.second).any {
-                !isInPolygon(
-                    Pair(bottomLeft.first, it),
-                    filtered,
-                    goRight
-                )
-            }) return false
-        if ((topLeft.first..bottomLeft.first).any {
-                !isInPolygon(
-                    Pair(it, topLeft.second),
-                    filtered,
-                    goRight
-                )
-            }) return false
-        if ((topRight.first..bottomRight.first).any {
-                !isInPolygon(
-                    Pair(it, topRight.second),
-                    filtered,
-                    goRight
-                )
-            }) return false
-
-        return true
-    }
-
-    fun part22(input: List<String>): Long {
-        val redTiles = parseInput(input)
-
-        // Build polygon outline
-        val border = mutableSetOf<Pair<Long, Long>>()
-        for (i in redTiles.indices) {
-            val current = redTiles[i]
-            val next = redTiles[(i + 1) % redTiles.size]
-            border.add(current)
-
-            if (current.first == next.first) {
-                // same row
-                val min = min(current.second, next.second)
-                val max = max(current.second, next.second)
-                (min until max).forEach {
-                    border.add(Pair(current.first, it))
-                }
-            } else if (current.second == next.second) {
-                // same column
-                val min = min(current.first, next.first)
-                val max = max(current.first, next.first)
-                (min until max).forEach {
-                    border.add(Pair(it, current.second))
-                }
-            } else {
-                throw IllegalArgumentException("Invalid input")
+        val prefix = List(rowCount + 1) { MutableList(colCount + 1) { 0L } }
+        for (row in 1..rowCount) {
+            for (col in 1..colCount) {
+                val prefixAbove = prefix[row - 1][col]
+                val prefixLeft = prefix[row][col - 1]
+                val prefixTopLeft = prefix[row - 1][col - 1]
+                // Indexing inside by -1 because the left/top border of the prefix sum is padding
+                val currentCellValue = if (grid[row - 1][col - 1]) 1 else 0
+                prefix[row][col] = prefixAbove + prefixLeft - prefixTopLeft + currentCellValue
             }
         }
 
-        val borderByRow = border.groupBy { it.first }.map { (row, points) -> row to points.sortedBy { it.second }.toSet() }.toMap()
+        return prefix
+    }
 
-        val minCol = border.minBy { it.second }.second
-        var maxCol = border.maxBy { it.second }.second
+    /**
+     * Ray casting algorithm to determine if a point is inside a polygon
+     *
+     * Polygon given as list of (row, col) points in convex order
+     */
+    fun isPointInPolygon(col: Double, row: Double, polygon: List<Pair<Double, Double>>): Boolean {
+        var inside = false
 
+        // Ray is cast to the right
+        for (i in 0 until polygon.size) {
+            val (rowI, colI) = polygon[i]
+            val (rowJ, colJ) = polygon[(i + 1) % polygon.size]
+
+            // If both rows of the vertices are on the same side of the ray, no crossing because the ray is horizontal
+            val edgeCrossesRow = (rowI > row) != (rowJ > row)
+
+            val horizontalGradient = (colJ - colI) / (rowJ - rowI)
+            val distanceToRay = row - rowI
+            val colValueAtRay = horizontalGradient * distanceToRay + colI
+
+            // If colValueAtRay is grater than col, then the ray will cross the edge, other it has already passed it
+            if (edgeCrossesRow && col < colValueAtRay) {
+                inside = !inside
+            }
+        }
+        return inside
+    }
+
+    fun coordinateCompression(polygon: List<Pair<Long, Long>>): Polygon {
+        val yCoords = polygon.map { it.first }.distinct().sorted()
+        val xCoords = polygon.map { it.second }.distinct().sorted()
+        val rowCount = yCoords.size - 1
+        val colCount = xCoords.size - 1
+
+        val polygonPoints = polygon.map { it.first.toDouble() to it.second.toDouble() }
+        val inside = List(rowCount) { MutableList(colCount) { false } }
+        for (row in 0 until rowCount) {
+            val yMid = (yCoords[row] + yCoords[row + 1]) / 2.0
+            for (col in 0 until colCount) {
+                val xMid = (xCoords[col] + xCoords[col + 1]) / 2.0
+                // Because all edges are axis-aligned, meaning they are either horizontal or vertical,
+                // checking the midpoint is sufficient to determine if the entire cell is inside the polygon,
+                // because all edges run along the grid lines.
+                inside[row][col] = isPointInPolygon(xMid, yMid, polygonPoints)
+            }
+        }
+
+        val prefix = calculatePrefixSum(inside)
+        val yIndex = yCoords.withIndex().associate { it.value to it.index }
+        val xIndex = xCoords.withIndex().associate { it.value to it.index }
+
+        return Polygon(xIndex, yIndex, prefix)
+    }
+
+    fun part2(input: List<String>): Long {
+        val redTiles = parseInput(input)
+        val polygon = coordinateCompression(redTiles)
         var maxArea = 0L
-        println("Red Tile size ${redTiles.size}")
-        val rectanglesToCheck = redTiles.indices.flatMap { i ->
-            (i + 1 until redTiles.size).mapNotNull { j -> i to j }
-        }.count()
-        println("Total rectangles to check: $rectanglesToCheck")
 
-        redTiles.indices.forEach { i ->
-            (i + 1 until redTiles.size).forEach { j ->
+        for (i in 0 until redTiles.lastIndex) {
+            for (j in i + 1 until redTiles.size) {
                 val c1 = redTiles[i]
                 val c2 = redTiles[j]
 
-                val dr = c1.first - c2.first
-                val dc = c1.second - c2.second
-
-                val area = (abs(dr) + 1) * (abs(dc) + 1)
-
-                // 1_561_582_800 -> too high
-                if (area > maxArea) {
-                    println("Checking rectangle with area ${area}")
-                    if (isInPolygon(c1, c2, borderByRow, minCol, maxCol)) {
-                        maxArea = area
-                        println("New max area: $maxArea for corners $c1 and $c2")
-                    }
-                } else {
-                    println("Skipping because too small")
-                }
+                val rectangleArea = (abs(c1.first - c2.first) + 1) * (abs(c1.second - c2.second) + 1)
+                if (rectangleArea <= maxArea) continue
+                if (polygon.containsRectangle(c1, c2)) maxArea = rectangleArea
             }
         }
 
@@ -168,9 +165,9 @@ fun main() {
 
     val testInput = readInput("day09/day09_test")
     check(part1(testInput), 50)
-//    check(part22(testInput), 24)
+    check(part2(testInput), 24)
 
     val input = readInput("day09/day09")
     part1(input).println()
-    part22(input).println()
+    part2(input).println()
 }
