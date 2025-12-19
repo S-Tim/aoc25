@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Interactive 2D Coordinate Compression – Polygon</title>
+  <style>
+      body {
+          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+          margin: 0;
+          padding: 20px;
+          background-color: #f5f5f5;
+          color: #333;
+      }
+      h1 {
+          text-align: center;
+          font-weight: 600;
+          margin-bottom: 20px;
+      }
+      .container {
+          display: flex;
+          justify-content: center;
+          gap: 40px;
+          flex-wrap: wrap;
+      }
+      .canvas-container {
+          background: #fff;
+          border-radius: 12px;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+          padding: 20px;
+          position: relative;
+      }
+      canvas {
+          border: 1px solid #ccc;
+          border-radius: 8px;
+          background: #fafafa;
+          display: block;
+          margin: 0 auto;
+          cursor: grab;
+      }
+      .label {
+          text-align: center;
+          margin-top: 10px;
+          font-weight: 500;
+      }
+      .mapping {
+          text-align: center;
+          margin-top: 5px;
+          font-family: monospace;
+          font-size: 14px;
+          color: #555;
+      }
+      .controls {
+          text-align: center;
+          margin-bottom: 20px;
+      }
+      textarea {
+          width: 300px;
+          height: 120px;
+          margin-top: 10px;
+          font-family: monospace;
+          font-size: 14px;
+          padding: 5px;
+          border-radius: 6px;
+          border: 1px solid #ccc;
+      }
+      button {
+          background-color: #1976d2;
+          color: #fff;
+          border: none;
+          padding: 10px 20px;
+          border-radius: 6px;
+          font-size: 16px;
+          cursor: pointer;
+          transition: background 0.2s;
+          margin-left: 10px;
+      }
+      button:hover {
+          background-color: #1565c0;
+      }
+      .remove-tip {
+          position: absolute;
+          left: 0;
+          top: 0;
+          pointer-events: none;
+          background: #fffbe7;
+          color: #b71c1c;
+          border: 1px solid #ffe082;
+          border-radius: 6px;
+          padding: 4px 8px;
+          font-size: 13px;
+          font-family: monospace;
+          z-index: 10;
+          display: none;
+      }
+  </style>
+</head>
+<body>
+<h1>Interactive 2D Coordinate Compression – Polygon</h1>
+<div class="controls">
+  <label style="margin-right:12px;"><input type="checkbox" id="labelToggle" onchange="toggleLabels(this)"> Show vertex labels</label>
+  <button onclick="generatePolygon()">Generate Random Polygon</button>
+  <span style="margin-left: 20px; font-size: 14px;">Drag vertices. Wheel zooms toward cursor.</span><br>
+  <textarea id="polygonInput" placeholder="Paste coordinates like:\n7,1\n11,1\n11,7\n..."></textarea>
+  <button onclick="loadPolygonFromInput()">Load Polygon</button>
+</div>
+<div class="container">
+  <div class="canvas-container" style="position:relative;">
+    <canvas id="original" width="600" height="600"></canvas>
+    <div class="remove-tip" id="removeTip">Right-click to remove vertex</div>
+    <div class="label">Original Coordinates</div>
+    <div id="originalMapping" class="mapping"></div>
+  </div>
+  <div class="canvas-container">
+    <canvas id="compressed" width="600" height="600"></canvas>
+    <div class="label">Compressed Coordinates</div>
+    <div id="compressedMapping" class="mapping"></div>
+  </div>
+</div>
+<script>
+  /* =====================
+     State
+  ===================== */
+  const originalCanvas = document.getElementById("original");
+  const compressedCanvas = document.getElementById("compressed");
+  const octx = originalCanvas.getContext("2d");
+  const cctx = compressedCanvas.getContext("2d");
+  const originalMapping = document.getElementById("originalMapping");
+  const compressedMapping = document.getElementById("compressedMapping");
+  const removeTip = document.getElementById("removeTip");
+
+  const POINT_RADIUS = 7;
+  const CANVAS_SIZE = 600;
+  const SCREEN_PAD = 50;
+  let originalPad = SCREEN_PAD;
+  let points = [];
+  let compressedPoints = [];
+  let xs = [], ys = [];
+  let hoverIndex = -1;
+  let dragIndex = -1;
+
+  let zoom = 1;
+  let offsetX = 0;
+  let offsetY = 0;
+  let isPanning = false;
+  let panStart = { x: 0, y: 0 };
+  let showLabels = false; // Default: labels off
+  let hoveredCell = null;
+
+  /* =====================
+     Utilities
+  ===================== */
+  function toggleLabels(cb) {
+    showLabels = cb.checked;
+    draw();
+  }
+
+  function isAxisAligned(a, b) {
+    return a.x === b.x || a.y === b.y;
+  }
+
+  function segmentsIntersect(a, b, c, d) {
+    function orient(p, q, r) {
+      return (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
+    }
+    function onSeg(p, q, r) {
+      return (
+        Math.min(p.x, r.x) <= q.x && q.x <= Math.max(p.x, r.x) &&
+        Math.min(p.y, r.y) <= q.y && q.y <= Math.max(p.y, r.y)
+      );
+    }
+    const o1 = orient(a, b, c);
+    const o2 = orient(a, b, d);
+    const o3 = orient(c, d, a);
+    const o4 = orient(c, d, b);
+    if (o1 * o2 < 0 && o3 * o4 < 0) return true;
+    if (o1 === 0 && onSeg(a, c, b)) return true;
+    if (o2 === 0 && onSeg(a, d, b)) return true;
+    if (o3 === 0 && onSeg(c, a, d)) return true;
+    if (o4 === 0 && onSeg(c, b, d)) return true;
+    return false;
+  }
+
+  function polygonValid(pts) {
+    const n = pts.length - 1;
+    for (let i = 0; i < n; i++) {
+      if (!isAxisAligned(pts[i], pts[i + 1])) return false;
+      for (let j = i + 2; j < n; j++) {
+        if (i === 0 && j === n - 1) continue;
+        if (segmentsIntersect(pts[i], pts[i + 1], pts[j], pts[j + 1])) return false;
+      }
+    }
+    return true;
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function cameraStroke(basePx, viewZoom, minPx = 0.5, maxPx = basePx * 1.5) {
+    const safeZoom = Math.max(viewZoom, 0.01);
+    const pixelWidth = clamp(basePx / safeZoom, minPx, maxPx);
+    return pixelWidth / safeZoom;
+  }
+
+  function worldRadius(screenPx, currentZoom = zoom) {
+    return screenPx / Math.max(currentZoom, 0.01);
+  }
+  function fitViewToPolygon() {
+    const minX = Math.min(...points.map(p => p.x));
+    const maxX = Math.max(...points.map(p => p.x));
+    const minY = Math.min(...points.map(p => p.y));
+    const maxY = Math.max(...points.map(p => p.y));
+    const spanX = Math.max(maxX - minX, 1);
+    const spanY = Math.max(maxY - minY, 1);
+    const targetSpan = CANVAS_SIZE - 2 * SCREEN_PAD;
+    zoom = Math.min(targetSpan / spanX, targetSpan / spanY);
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    offsetX = CANVAS_SIZE / 2 - cx * zoom;
+    offsetY = CANVAS_SIZE / 2 - cy * zoom;
+    originalPad = SCREEN_PAD / zoom;
+  }
+
+  /* =====================
+     Polygon creation
+  ===================== */
+  function generatePolygon() {
+    for (let tries = 0; tries < 5000; tries++) {
+      const pts = [];
+      const n = 15 + Math.floor(Math.random() * 5);
+      let x = Math.floor(50 + Math.random() * 500);
+      let y = Math.floor(50 + Math.random() * 500);
+      pts.push({ x, y });
+      for (let i = 1; i < n; i++) {
+        const step = 20 + Math.floor(Math.random() * 80);
+        if (Math.random() < 0.5) {
+          x += Math.random() < 0.5 ? -step : step;
+          pts.push({ x, y: pts[i - 1].y });
+        } else {
+          y += Math.random() < 0.5 ? -step : step;
+          pts.push({ x: pts[i - 1].x, y });
+        }
+      }
+      const first = pts[0];
+      const last = pts[pts.length - 1];
+      if (last.x !== first.x && last.y !== first.y) {
+        pts.push({ x: last.x, y: first.y });
+      }
+      pts.push({ x: first.x, y: first.y });
+      if (polygonValid(pts)) {
+        points = pts;
+        fitViewToPolygon();
+        compressPoints();
+        draw();
+        return;
+      }
+    }
+    alert("Failed to generate a valid polygon");
+  }
+
+  function loadPolygonFromInput() {
+    const text = document.getElementById('polygonInput').value.trim();
+    const lines = text.split('\n');
+    const seen = new Set();
+    const pts = [];
+
+    for (const line of lines) {
+      const parts = line.split(',');
+      if (parts.length !== 2) continue;
+      const x = parseInt(parts[0], 10);
+      const y = parseInt(parts[1], 10);
+      if (Number.isInteger(x) && Number.isInteger(y)) {
+        const key = `${x},${y}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          pts.push({ x, y });
+        }
+      }
+    }
+
+    if (pts.length < 3) {
+      alert('Need at least 3 unique integer points');
+      return;
+    }
+
+    const first = pts[0];
+    const last = pts[pts.length - 1];
+    if (last.x !== first.x && last.y !== first.y) {
+      pts.push({ x: last.x, y: first.y });
+    }
+    pts.push({ x: first.x, y: first.y });
+
+    if (!polygonValid(pts)) {
+      alert('Polygon must be axis-aligned and non-intersecting');
+      return;
+    }
+
+    points = pts;
+    fitViewToPolygon();
+    compressPoints();
+    draw();
+  }
+
+  /* =====================
+     Compression
+  ===================== */
+  function compressPoints() {
+    xs = [...new Set(points.map(p => p.x))].sort((a, b) => a - b);
+    ys = [...new Set(points.map(p => p.y))].sort((a, b) => a - b);
+
+    const xm = new Map(xs.map((v, i) => [v, i]));
+    const ym = new Map(ys.map((v, i) => [v, i]));
+    const pad = 50;
+    const sx = (compressedCanvas.width - 2 * pad) / Math.max(1, xs.length - 1);
+    const sy = (compressedCanvas.height - 2 * pad) / Math.max(1, ys.length - 1);
+
+    compressedPoints = points.map(p => ({
+      cx: pad + xm.get(p.x) * sx,
+      cy: pad + ym.get(p.y) * sy,
+      ox: p.x,
+      oy: p.y,
+      cxIdx: xm.get(p.x),
+      cyIdx: ym.get(p.y)
+    }));
+  }
+
+  /* =====================
+     Drawing
+  ===================== */
+  function drawGrid(ctx, w, h, xvals, yvals, pad, compressed, viewZoom = 1) {
+    if (compressed) {
+      ctx.strokeStyle = '#e2e7f1';
+      ctx.lineWidth = cameraStroke(1.2, 1, 0.6, 1.6);
+      xvals.forEach((x, i) => {
+        const pos = pad + i * ((w - 2 * pad) / Math.max(1, xvals.length - 1));
+        ctx.beginPath(); ctx.moveTo(pos, pad); ctx.lineTo(pos, h - pad); ctx.stroke();
+      });
+      yvals.forEach((y, i) => {
+        const pos = pad + i * ((h - 2 * pad) / Math.max(1, yvals.length - 1));
+        ctx.beginPath(); ctx.moveTo(pad, pos); ctx.lineTo(w - pad, pos); ctx.stroke();
+      });
+      return;
+    }
+
+    if (!xvals.length || !yvals.length) return;
+
+    const minX = xvals[0];
+    const maxX = xvals[xvals.length - 1];
+    const minY = yvals[0];
+    const maxY = yvals[yvals.length - 1];
+    const spanX = Math.max(maxX - minX, 1);
+    const spanY = Math.max(maxY - minY, 1);
+    const marginX = Math.max(spanX * 0.08, 1);
+    const marginY = Math.max(spanY * 0.08, 1);
+    const left = minX - marginX;
+    const right = maxX + marginX;
+    const top = minY - marginY;
+    const bottom = maxY + marginY;
+
+    ctx.strokeStyle = '#dfe5f0';
+    ctx.lineWidth = cameraStroke(1.4, viewZoom, 0.45, 2.2);
+    xvals.forEach(x => {
+      ctx.beginPath();
+      ctx.moveTo(x, top);
+      ctx.lineTo(x, bottom);
+      ctx.stroke();
+    });
+    yvals.forEach(y => {
+      ctx.beginPath();
+      ctx.moveTo(left, y);
+      ctx.lineTo(right, y);
+      ctx.stroke();
+    });
+
+    ctx.strokeStyle = '#c6d3e6';
+    ctx.lineWidth = cameraStroke(1.8, viewZoom, 0.65, 2.6);
+    ctx.strokeRect(left, top, right - left, bottom - top);
+  }
+
+  function drawPoly(ctx, pts, hi, viewZoom = 1) {
+    if (!pts.length) return;
+    const safeZoom = Math.max(viewZoom, 0.01);
+    ctx.strokeStyle = '#1976d2';
+    ctx.lineWidth = cameraStroke(2.4, viewZoom, 0.55, 3.2);
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x ?? pts[0].cx, pts[0].y ?? pts[0].cy);
+    for (let i = 1; i < pts.length; i++) {
+      ctx.lineTo(pts[i].x ?? pts[i].cx, pts[i].y ?? pts[i].cy);
+    }
+    ctx.stroke();
+    pts.forEach((p, i) => {
+      const x = p.x ?? p.cx;
+      const y = p.y ?? p.cy;
+      const radius = Math.max(0.1, POINT_RADIUS / safeZoom);
+      ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = i === hi ? '#d32f2f' : '#1976d2';
+      ctx.fill();
+      if (showLabels) {
+        const label = p.x !== undefined ? `(${p.x}, ${p.y})` : `(${p.cxIdx}, ${p.cyIdx})`;
+        const labelFont = 12 / safeZoom;
+        const labelOffset = 4 / safeZoom;
+        ctx.font = `${labelFont}px monospace`;
+        ctx.fillStyle = '#333';
+        ctx.fillText(label, x + radius + labelOffset, y - radius - labelOffset);
+      }
+    });
+  }
+
+  function draw() {
+    octx.save();
+    octx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+    octx.translate(offsetX, offsetY);
+    octx.scale(zoom, zoom);
+    const viewWidth = CANVAS_SIZE / zoom;
+    const viewHeight = CANVAS_SIZE / zoom;
+    drawGrid(octx, viewWidth, viewHeight, xs, ys, originalPad, false, zoom);
+
+    if (hoveredCell) {
+      const r = hoveredCell.original;
+      octx.fillStyle = 'rgba(255,193,7,0.25)';
+      octx.fillRect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
+    }
+
+    drawPoly(octx, points, hoverIndex, zoom);
+    octx.restore();
+
+    cctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+    drawGrid(cctx, CANVAS_SIZE, CANVAS_SIZE, xs, ys, SCREEN_PAD, true, 1);
+
+    if (hoveredCell) {
+      const r = hoveredCell.compressed;
+      cctx.fillStyle = 'rgba(255,193,7,0.35)';
+      cctx.fillRect(r.cx0, r.cy0, r.cx1 - r.cx0, r.cy1 - r.cy0);
+    }
+
+    drawPoly(cctx, compressedPoints, hoverIndex, 1);
+
+    if (hoverIndex >= 0) {
+      const cp = compressedPoints[hoverIndex];
+      originalMapping.textContent = `Original: (${cp.ox}, ${cp.oy})`;
+      compressedMapping.textContent = `Compressed: (${cp.cxIdx}, ${cp.cyIdx})`;
+    } else {
+      originalMapping.textContent = '';
+      compressedMapping.textContent = '';
+    }
+  }
+
+  /* =====================
+     Interaction
+  ===================== */
+  function getMouse(e) {
+    const r = originalCanvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - r.left - offsetX) / zoom,
+      y: (e.clientY - r.top - offsetY) / zoom
+    };
+  }
+
+  originalCanvas.addEventListener('mousedown', e => {
+    const { x, y } = getMouse(e);
+    const hitRadius = worldRadius(POINT_RADIUS + 2);
+    dragIndex = -1;
+    for (let i = 0; i < points.length; i++) {
+      if (Math.hypot(points[i].x - x, points[i].y - y) <= hitRadius) {
+        dragIndex = i;
+        return;
+      }
+    }
+    isPanning = true;
+    panStart = { x: e.clientX, y: e.clientY };
+  });
+
+  originalCanvas.addEventListener('mousemove', e => {
+    const { x, y } = getMouse(e);
+    const hitRadius = worldRadius(POINT_RADIUS + 2);
+    if (dragIndex >= 0) {
+      const prev = points[dragIndex === 0 ? points.length - 2 : dragIndex - 1];
+      const old = { ...points[dragIndex] };
+      if (Math.abs(x - prev.x) < Math.abs(y - prev.y)) {
+        points[dragIndex].x = prev.x;
+        points[dragIndex].y = Math.round(y);
+      } else {
+        points[dragIndex].y = prev.y;
+        points[dragIndex].x = Math.round(x);
+      }
+      if (dragIndex === 0) points[points.length - 1] = { ...points[0] };
+      if (!polygonValid(points)) points[dragIndex] = old;
+      compressPoints();
+      draw();
+    } else if (isPanning) {
+      offsetX += e.clientX - panStart.x;
+      offsetY += e.clientY - panStart.y;
+      panStart = { x: e.clientX, y: e.clientY };
+      draw();
+    } else {
+      hoverIndex = -1;
+      for (let i = 0; i < points.length; i++) {
+        if (Math.hypot(points[i].x - x, points[i].y - y) <= hitRadius) {
+          hoverIndex = i;
+          break;
+        }
+      }
+      draw();
+    }
+  });
+
+  window.addEventListener('mouseup', () => {
+    dragIndex = -1;
+    isPanning = false;
+  });
+
+  originalCanvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const rect = originalCanvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const wx = (mx - offsetX) / zoom;
+    const wy = (my - offsetY) / zoom;
+    const factor = e.deltaY < 0 ? 1.1 : 0.9;
+    zoom *= factor;
+    offsetX = mx - wx * zoom;
+    offsetY = my - wy * zoom;
+    draw();
+  });
+
+  compressedCanvas.addEventListener('mousemove', e => {
+    const rect = compressedCanvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const pad = 50;
+    const sx = (compressedCanvas.width - 2 * pad) / Math.max(1, xs.length - 1);
+    const sy = (compressedCanvas.height - 2 * pad) / Math.max(1, ys.length - 1);
+    const i = Math.floor((mx - pad) / sx);
+    const j = Math.floor((my - pad) / sy);
+
+    if (i >= 0 && j >= 0 && i < xs.length - 1 && j < ys.length - 1) {
+      hoveredCell = {
+        compressed: {
+          cx0: pad + i * sx,
+          cx1: pad + (i + 1) * sx,
+          cy0: pad + j * sy,
+          cy1: pad + (j + 1) * sy
+        },
+        original: {
+          x0: xs[i], x1: xs[i + 1],
+          y0: ys[j], y1: ys[j + 1]
+        }
+      };
+    } else {
+      hoveredCell = null;
+    }
+    draw();
+  });
+
+  compressedCanvas.addEventListener('mouseleave', () => {
+    hoveredCell = null;
+    draw();
+  });
+
+  /* =====================
+     Init
+  ===================== */
+  // Set label toggle to unchecked by default
+  document.getElementById("labelToggle").checked = false;
+  generatePolygon();
+
+  // --- Vertex removal functionality ---
+  originalCanvas.addEventListener('contextmenu', function(e) {
+    e.preventDefault();
+    const { x, y } = getMouse(e);
+    const hitRadius = worldRadius(POINT_RADIUS + 2);
+    let idx = -1;
+    for (let i = 0; i < points.length - 1; i++) {
+      if (Math.hypot(points[i].x - x, points[i].y - y) <= hitRadius) {
+        idx = i;
+        break;
+      }
+    }
+    // Only allow removal if more than 4 points (3 vertices + closing point)
+    if (idx >= 0 && points.length > 5) {
+      // Remove the point at idx, connect predecessor to successor
+      points.splice(idx, 1);
+      // Ensure polygon closes
+      points[points.length - 1] = { ...points[0] };
+      fitViewToPolygon();
+      compressPoints();
+      draw();
+    }
+  });
+
+  // --- Show tooltip for right-click removal ---
+  originalCanvas.addEventListener('mousemove', function(e) {
+    const { x, y } = getMouse(e);
+    const hitRadius = worldRadius(POINT_RADIUS + 2);
+    let show = false;
+    let idx = -1;
+    for (let i = 0; i < points.length - 1; i++) {
+      if (Math.hypot(points[i].x - x, points[i].y - y) <= hitRadius) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx >= 0 && points.length > 5) {
+      show = true;
+      // Position tooltip
+      const rect = originalCanvas.getBoundingClientRect();
+      removeTip.style.left = (e.clientX - rect.left + 18) + "px";
+      removeTip.style.top = (e.clientY - rect.top - 10) + "px";
+      removeTip.style.display = "block";
+    } else {
+      removeTip.style.display = "none";
+    }
+  });
+
+  originalCanvas.addEventListener('mouseleave', function() {
+    removeTip.style.display = "none";
+  });
+</script>
+</body>
+</html>

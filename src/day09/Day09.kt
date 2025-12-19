@@ -10,7 +10,7 @@ import kotlin.math.min
 fun main() {
 
     fun parseInput(input: List<String>): List<Pair<Long, Long>> {
-        return input.map { it.split(",").map { it.toLong() } }.map { it.first() to it.last() }
+        return input.map { vertex -> vertex.split(",").map { it.toLong() } }.map { it.first() to it.last() }
     }
 
     fun part1(input: List<String>): Long {
